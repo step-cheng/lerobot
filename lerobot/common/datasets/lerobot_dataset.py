@@ -364,6 +364,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         force_cache_sync: bool = False,
         download_videos: bool = True,
         video_backend: str | None = None,
+        task_embs: torch.Tensor | None = None,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -515,6 +516,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             check_delta_timestamps(self.delta_timestamps, self.fps, self.tolerance_s)
             self.delta_indices = get_delta_indices(self.delta_timestamps, self.fps)
 
+        # self.task_embeddings = task_embs
     def push_to_hub(
         self,
         branch: str | None = None,
@@ -718,21 +720,34 @@ class LeRobotDataset(torch.utils.data.Dataset):
             item[key] = torch.BoolTensor(val)
         return item
 
+    # def _get_task_embedding(self, task_idx):
+    #     """takes a task index, returns the task embeddings"""
+    #     return self.task_embeddings[task_idx]
+
     def __len__(self):
         return self.num_frames
 
     def __getitem__(self, idx) -> dict:
         item = self.hf_dataset[idx]
         ep_idx = item["episode_index"].item()
+        task_idx = item["task_index"].item()
+        # task_emb = self._get_task_embedding(task_idx)
+        # item['lang_emb'] = task_emb
 
+        # print(f"Episode index: {ep_idx}, Frame index: {idx}")
         query_indices = None
         if self.delta_indices is not None:
             query_indices, padding = self._get_query_indices(idx, ep_idx)
+            # print(f"Query indices: {query_indices}")
+            # print(f"Padding: {padding}")
             query_result = self._query_hf_dataset(query_indices)
+            # print(f"Query result: {query_result}")
             item = {**item, **padding}
             for key, val in query_result.items():
                 item[key] = val
 
+            # print(f"metadata video keys: {self.meta.video_keys}")
+            # print(f"metadata camera keys: {self.meta.camera_keys}")
         if len(self.meta.video_keys) > 0:
             current_ts = item["timestamp"].item()
             query_timestamps = self._get_query_timestamps(current_ts, query_indices)

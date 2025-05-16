@@ -86,7 +86,7 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
         cache_dir: str | Path | None = None,
         local_files_only: bool = False,
         revision: str | None = None,
-        strict: bool = False,
+        strict: bool = True,
         **kwargs,
     ) -> T:
         """

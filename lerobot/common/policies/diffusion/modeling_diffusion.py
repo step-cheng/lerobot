@@ -25,6 +25,7 @@ from collections import deque
 from typing import Callable
 
 import einops
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812
@@ -43,6 +44,8 @@ from lerobot.common.policies.utils import (
     get_output_shape,
     populate_queues,
 )
+import sys
+from lerobot.common.policies.diffusion.state_encoders import DiffusionStateLinear, DiffusionStateMLP, RIBSStateEncoder
 
 
 class DiffusionPolicy(PreTrainedPolicy):
@@ -58,6 +61,7 @@ class DiffusionPolicy(PreTrainedPolicy):
         self,
         config: DiffusionConfig,
         dataset_stats: dict[str, dict[str, Tensor]] | None = None,
+        task_embeddings: Tensor | None = None,
     ):
         """
         Args:
@@ -81,12 +85,15 @@ class DiffusionPolicy(PreTrainedPolicy):
         # queues are populated during rollout of the policy, they contain the n latest observations and actions
         self._queues = None
 
-        self.diffusion = DiffusionModel(config)
+        self.diffusion = DiffusionModel(config, task_embeddings)
 
         self.reset()
 
     def get_optim_params(self) -> dict:
         return self.diffusion.parameters()
+
+    def set_task_embeddings(self, task_embeddings):
+        self.diffusion.task_embeddings = task_embeddings
 
     def reset(self):
         """Clear observation and action queues. Should be called on `env.reset()`"""
@@ -130,9 +137,11 @@ class DiffusionPolicy(PreTrainedPolicy):
         # Note: It's important that this happens after stacking the images into a single key.
         self._queues = populate_queues(self._queues, batch)
 
+        task_inds = batch['task_index']
         if len(self._queues["action"]) == 0:
             # stack n latest observations from the queue
             batch = {k: torch.stack(list(self._queues[k]), dim=1) for k in batch if k in self._queues}
+            batch['task_index'] = task_inds
             actions = self.diffusion.generate_actions(batch)
 
             # TODO(rcadene): make above methods return output dictionary?
@@ -171,12 +180,37 @@ def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMSche
 
 
 class DiffusionModel(nn.Module):
-    def __init__(self, config: DiffusionConfig):
+    def __init__(self, config: DiffusionConfig, task_embeddings: Tensor | None = None):
         super().__init__()
         self.config = config
+        self.task_embeddings = task_embeddings
 
         # Build observation encoders (depending on which observations are provided).
-        global_cond_dim = self.config.robot_state_feature.shape[0]
+        if config.use_state_encoder:
+            if config.use_ribs:
+                ribs_encoder = RIBSStateEncoder()
+                ribs_encoder.load_state_dict(torch.load(config.ribs_path))
+                if config.ribs_frozen:
+                    for param in ribs_encoder.parameters():
+                        param.requires_grad = False
+                self.state_encoder = ribs_encoder
+            else:
+                self.state_encoder = DiffusionStateMLP(output_dim=config.state_hidden_dim)
+        else:
+            self.state_encoder = nn.Identity()
+        
+        if config.use_lang_encoder:
+            self.lang_encoder = nn.Sequential(nn.Linear(768, 2*config.lang_hidden_dim), nn.GELU(), nn.Linear(2*config.lang_hidden_dim, config.lang_hidden_dim))
+            self.lang_hidden_dim = config.lang_hidden_dim
+        else:
+            self.lang_encoder = nn.Identity()
+            self.lang_hidden_dim = 768
+        
+        global_cond_dim = 0
+        if self.config.robot_state_feature:
+            global_cond_dim += self.state_encoder.feature_dim if config.use_state_encoder else self.config.robot_state_feature.shape[0]
+        # global_cond_dim = self.config.robot_state_feature.shape[0]
+
         if self.config.image_features:
             num_images = len(self.config.image_features)
             if self.config.use_separate_rgb_encoder_per_camera:
@@ -189,7 +223,28 @@ class DiffusionModel(nn.Module):
         if self.config.env_state_feature:
             global_cond_dim += self.config.env_state_feature.shape[0]
 
-        self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
+        global_cond_dim = global_cond_dim * config.n_obs_steps + self.lang_hidden_dim
+        print(f"global conditioning dimension: {global_cond_dim}")
+        cond_mlp_dims = [(global_cond_dim, config.cond_mlp_dims[0])] + list(
+            zip(config.cond_mlp_dims[:-1], config.cond_mlp_dims[1:], strict=True)
+        )
+        if config.cond_emb_dim is None:
+            cond_emb_mlp = nn.ModuleList([])
+            for ind, (dim_in, dim_out) in enumerate(cond_mlp_dims):
+                if ind >= len(cond_mlp_dims) - 1:
+                    cond_emb_mlp.extend(
+                        [nn.Linear(dim_in, dim_out), nn.GELU()]                
+                    )
+                else:
+                    cond_emb_mlp.append(nn.Linear(dim_in, dim_out))
+            self.cond_emb_mlp = nn.Sequential(*cond_emb_mlp)
+        else: # legacy from libero object ribs first one that got 50% accuracy
+            self.cond_emb_mlp = nn.Sequential(
+                nn.Linear(global_cond_dim, config.cond_emb_dim),
+                nn.GELU(),
+                nn.Linear(config.cond_emb_dim, config.cond_emb_dim)
+            )
+        self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=config.cond_mlp_dims[-1])
 
         self.noise_scheduler = _make_noise_scheduler(
             config.noise_scheduler_type,
@@ -206,6 +261,17 @@ class DiffusionModel(nn.Module):
             self.num_inference_steps = self.noise_scheduler.config.num_train_timesteps
         else:
             self.num_inference_steps = config.num_inference_steps
+
+        if config.use_layer_norm:
+            self.layernorm_state = nn.LayerNorm(128)
+            self.layernorm_lang = nn.LayerNorm(128)
+            self.layernorm_img_agent = nn.LayerNorm(self.rgb_encoder[0].feature_dim)
+            self.layernorm_img_wrist = nn.LayerNorm(self.rgb_encoder[1].feature_dim)
+        else:
+            self.layernorm_state = nn.Identity()
+            self.layernorm_lang = nn.Identity()
+            self.layernorm_img_agent = nn.Identity()
+            self.layernorm_img_wrist = nn.Identity()
 
     # ========= inference  ============
     def conditional_sample(
@@ -239,7 +305,19 @@ class DiffusionModel(nn.Module):
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode image features and concatenate them all together along with the state vector."""
         batch_size, n_obs_steps = batch[OBS_ROBOT].shape[:2]
-        global_cond_feats = [batch[OBS_ROBOT]]
+        global_cond_feats = []
+        if self.config.use_ribs:
+            mu, _ = self.state_encoder(batch[OBS_ROBOT])
+            state_features = self.layernorm_state(mu)
+        else:
+            state_features = self.layernorm_state(self.state_encoder(batch[OBS_ROBOT]))
+
+        global_cond_feats.append(state_features)
+        # print(f"state features: {state_features.shape}")
+        # global_cond_feats = [batch[OBS_ROBOT]]
+        # print(len(global_cond_feats))
+        # print(global_cond_feats[0].shape)
+        # print(torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1).shape)
         # Extract image features.
         if self.config.image_features:
             if self.config.use_separate_rgb_encoder_per_camera:
@@ -254,7 +332,8 @@ class DiffusionModel(nn.Module):
                 # Separate batch and sequence dims back out. The camera index dim gets absorbed into the
                 # feature dim (effectively concatenating the camera features).
                 img_features = einops.rearrange(
-                    img_features_list, "(n b s) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+                    img_features_list, "(n b s) ... -> b s n ...", b=batch_size, s=n_obs_steps
+                    # img_features_list, "(n b s) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
                 )
             else:
                 # Combine batch, sequence, and "which camera" dims before passing to shared encoder.
@@ -264,15 +343,29 @@ class DiffusionModel(nn.Module):
                 # Separate batch dim and sequence dim back out. The camera index dim gets absorbed into the
                 # feature dim (effectively concatenating the camera features).
                 img_features = einops.rearrange(
-                    img_features, "(b s n) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+                    img_features, "(b s n) ... -> b s n ...", b=batch_size, s=n_obs_steps
+                    # img_features, "(b s n) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
                 )
+            agent_view = self.layernorm_img_agent(img_features[:,:,0])
+            wrist_view = self.layernorm_img_wrist(img_features[:,:,1])
+            img_features = torch.stack([agent_view, wrist_view], dim=2)
+            img_features = einops.rearrange(img_features, "b s n d -> b s (n d)")
+            # print(f"img features: {img_features.shape}")
             global_cond_feats.append(img_features)
 
         if self.config.env_state_feature:
             global_cond_feats.append(batch[OBS_ENV])
 
         # Concatenate features then flatten to (B, global_cond_dim).
-        return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
+        task_embed = self.task_embeddings[batch["task_index"]]
+        lang_features = self.layernorm_lang(self.lang_encoder(task_embed))
+        # print(f"task_embed: {task_embed.shape}")
+        # print(f"lang_features: {lang_features.shape}")
+        global_cond_feats = torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
+        # print("global features:",global_cond_feats.shape)
+        global_cond_feats = torch.cat((lang_features, global_cond_feats), dim=-1)
+        return self.cond_emb_mlp(global_cond_feats)
+        # return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
 
     def generate_actions(self, batch: dict[str, Tensor]) -> Tensor:
         """
@@ -489,7 +582,7 @@ class DiffusionRgbEncoder(nn.Module):
         feature_map_shape = get_output_shape(self.backbone, dummy_shape)[1:]
 
         self.pool = SpatialSoftmax(feature_map_shape, num_kp=config.spatial_softmax_num_keypoints)
-        self.feature_dim = config.spatial_softmax_num_keypoints * 2
+        self.feature_dim = config.spatial_softmax_num_keypoints * 2 if config.img_hidden_dim is None else config.img_hidden_dim
         self.out = nn.Linear(config.spatial_softmax_num_keypoints * 2, self.feature_dim)
         self.relu = nn.ReLU()
 
@@ -601,12 +694,14 @@ class DiffusionConditionalUnet1d(nn.Module):
 
         # The FiLM conditioning dimension.
         cond_dim = config.diffusion_step_embed_dim + global_cond_dim
+        print(f"[INFO] UNet Conditioning dimension: {cond_dim}")
 
         # In channels / out channels for each downsampling block in the Unet's encoder. For the decoder, we
         # just reverse these.
         in_out = [(config.action_feature.shape[0], config.down_dims[0])] + list(
             zip(config.down_dims[:-1], config.down_dims[1:], strict=True)
         )
+        print(f"in out dims for Unet1d: {in_out}")
 
         # Unet encoder.
         common_res_block_kwargs = {
@@ -617,6 +712,7 @@ class DiffusionConditionalUnet1d(nn.Module):
         }
         self.down_modules = nn.ModuleList([])
         for ind, (dim_in, dim_out) in enumerate(in_out):
+            # if ind == 0: print(f"initialize down module: {dim_in}, {dim_out}, {common_res_block_kwargs}")
             is_last = ind >= (len(in_out) - 1)
             self.down_modules.append(
                 nn.ModuleList(

@@ -122,13 +122,23 @@ class DiffusionConfig(PreTrainedConfig):
 
     # Architecture / modeling.
     # Vision backbone.
+    task_embedding_format: str = "bert"
     vision_backbone: str = "resnet18"
+    resize_size: int | None = 224
     crop_shape: tuple[int, int] | None = (84, 84)
     crop_is_random: bool = True
     pretrained_backbone_weights: str | None = None
     use_group_norm: bool = True
     spatial_softmax_num_keypoints: int = 32
-    use_separate_rgb_encoder_per_camera: bool = False
+    use_separate_rgb_encoder_per_camera: bool = True
+    img_hidden_dim: int | None= 128
+    lang_hidden_dim: int | None = None
+    state_hidden_dim: int = 128
+    cond_emb_dim: int | None = None
+    cond_mlp_dims: tuple = (1024, 512, 512)
+    use_layer_norm: bool = True
+    use_lang_encoder: bool = True
+    use_state_encoder: bool = True
     # Unet.
     down_dims: tuple[int, ...] = (512, 1024, 2048)
     kernel_size: int = 5
@@ -144,6 +154,10 @@ class DiffusionConfig(PreTrainedConfig):
     prediction_type: str = "epsilon"
     clip_sample: bool = True
     clip_sample_range: float = 1.0
+    ema_decay: float = 0.99
+    use_ribs: float = False
+    ribs_path: str = "../RIBS/src/ribs-libero_object.pth"
+    ribs_frozen: bool = False
 
     # Inference
     num_inference_steps: int | None = None
@@ -153,11 +167,13 @@ class DiffusionConfig(PreTrainedConfig):
 
     # Training presets
     optimizer_lr: float = 1e-4
+    optimizer_lr_min: float = 1e-6
     optimizer_betas: tuple = (0.95, 0.999)
     optimizer_eps: float = 1e-8
     optimizer_weight_decay: float = 1e-6
-    scheduler_name: str = "cosine"
-    scheduler_warmup_steps: int = 500
+    scheduler_name: str = "linear"
+    scheduler_warmup_steps: int = 1000
+    save_every: int | None = None
 
     def __post_init__(self):
         super().__post_init__()
