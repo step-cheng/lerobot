@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 import random
+import safetensors
 import atexit
 import gc
 import os
@@ -45,7 +46,7 @@ from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 from lerobot.configs.types import FeatureType
 
 sys.path.append("./examples")
-from train_utils import get_task_embeddings, eval_train_policy
+from train_utils import get_task_embeddings #, eval_train_policy
 
 
 def main():
@@ -103,7 +104,7 @@ def main():
         ema_policy = copy.deepcopy(policy)
         if os.path.exists(pretrained_ema_path):
             print('ema policy was saved. loading now...')
-            ema_policy.load_state_dict(torch.load(pretrained_ema_path))
+            safetensors.torch.load_model(ema_policy, os.path.join(pretrained_ema_path, "model.safetensors"), strict=True)
             started_ema = True
         else:
             print("no ema policy was saved yet")
@@ -177,7 +178,7 @@ def main():
         # task_embs=task_embs,
     )
     # print(dataset[0]["observation.images.image"].shape)
-    # print(dataset[0]["observation.state"].shape)
+    # print(dataset[0]["observation.state"].shape, dataset[0]['observation.state'])
     # exit()
 
     # Then we create our optimizer and dataloader for offline training.

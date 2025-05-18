@@ -26,7 +26,7 @@ from pathlib import Path
 import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 import sys
-sys.path.append("../RIBS/LIBERO")
+sys.path.append("../LIBERO")
 from pprint import pprint
 import matplotlib.pyplot as plt
 from libero.libero import benchmark
