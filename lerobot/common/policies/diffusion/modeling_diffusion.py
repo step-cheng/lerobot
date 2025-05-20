@@ -187,7 +187,9 @@ class DiffusionModel(nn.Module):
 
         # Build observation encoders (depending on which observations are provided).
         if config.use_state_encoder:
+            print("Using state encoder")
             if config.use_ribs:
+                print("using ribs")
                 ribs_encoder = RIBSStateEncoder()
                 ribs_encoder.load_state_dict(torch.load(config.ribs_path))
                 if config.ribs_frozen:
@@ -195,6 +197,8 @@ class DiffusionModel(nn.Module):
                         param.requires_grad = False
                 self.state_encoder = ribs_encoder
             else:
+                print('Not using ribs')
+                assert config.state_hidden_dim is not None
                 self.state_encoder = DiffusionStateMLP(output_dim=config.state_hidden_dim)
         else:
             self.state_encoder = nn.Identity()
@@ -360,9 +364,9 @@ class DiffusionModel(nn.Module):
         task_embed = self.task_embeddings[batch["task_index"]]
         lang_features = self.layernorm_lang(self.lang_encoder(task_embed))
         # print(f"task_embed: {task_embed.shape}")
-        # print(f"lang_features: {lang_features.shape}")
+        # print(f"lang_features: {lang_features.shape}, {lang_features.dtype}")
         global_cond_feats = torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
-        # print("global features:",global_cond_feats.shape)
+        # print("global features:",global_cond_feats.shape, global_cond_feats.dtype)
         global_cond_feats = torch.cat((lang_features, global_cond_feats), dim=-1)
         return self.cond_emb_mlp(global_cond_feats)
         # return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)

@@ -24,12 +24,14 @@ from pprint import pprint
 import copy
 import json
 import torch
+from dataclasses import asdict
 import time
 import torchvision
 from torchvision import transforms
 import matplotlib.pyplot as plt
 import numpy as np
 import math
+import wandb
 import random
 import safetensors
 import atexit
@@ -51,14 +53,17 @@ from train_utils import get_task_embeddings #, eval_train_policy
 
 def main():
     # Create a directory to store the training checkpoint.
+    use_wandb = True
+    wandb_run_name = "libero_object_arch=droid_stateEncoder=True"
     dataset_name = "libero_object"
     use_ribs = False
-    ribs_suffix = "-ribs" if use_ribs else ""
-    resume = True
+    resume = False
     resume_step = 30000
 
+    ribs_suffix = "-ribs" if use_ribs else ""
     output_directory = Path(f"outputs/reproduce-openvla/{dataset_name}{ribs_suffix}")
     output_directory.mkdir(parents=True, exist_ok=True)
+    print(f"output path: {output_directory}")
 
     # Select your device
     device = torch.device("cuda")
@@ -126,9 +131,10 @@ def main():
             use_group_norm=True,
             use_layer_norm=False,
             use_lang_encoder=False,
-            use_state_encoder=False,
+            use_state_encoder=True,
             lang_hidden_dim=None,
             img_hidden_dim=None,
+            state_hidden_dim=128,
             noise_scheduler_type="DDIM",
             cond_mlp_dims=(1024, 512, 512),
             down_dims=(256, 512, 1024),
@@ -239,8 +245,8 @@ def main():
         scheduler.step(resume_step)
     done = False
     losses = []
-    success_rates = []
-    val_steps = []
+    # success_rates = []
+    # val_steps = []
 
     # Prepare models for training
     policy.train()
@@ -258,6 +264,13 @@ def main():
         ema_model.to('cpu')
 
     print("starting training")
+    if use_wandb:
+        run = wandb.init(
+            project="ribs",  # Specify your project
+            name=wandb_run_name,
+            config={**asdict(cfg)}        
+        )
+
     while not done:
         print(f"refreshing dataloader at step {step}")
         for batch in dataloader:
@@ -271,18 +284,21 @@ def main():
             optimizer.zero_grad()
             scheduler.step()
             losses.append(loss.detach().item())
+            log_dict = {}
 
             step += 1
             if started_ema:
                 update_ema(policy, ema_policy, cfg.ema_decay)
             if step % log_freq == 0:
                 print(f"step: {step} loss: {loss.item():.3f}, lr: {scheduler.get_last_lr()}")
+                log_dict["train_loss"] = loss.item()
             if step % ema_log_freq == 0 and started_ema:
                 ema_policy.to(device)
                 with torch.no_grad():
                     ema_loss, _ = ema_policy.forward(batch)
                     print(f"ema loss: {ema_loss.item():.3f}")
                 ema_policy.to('cpu')
+                log_dict["ema_loss"] = ema_loss.item()
             if save_flag(step):
                 print(f"saving models at step {step}")
                 policy.save_pretrained(output_directory/f"model-{step}")
@@ -294,46 +310,36 @@ def main():
                 if moving_avg_loss < 0.025:
                     print(f"[INFO] starting ema updates at step {step}")
                     ema_policy.to(device)
-                    ema_policy.load_state_dict(policy.state_dict())
+                    ema_policy.load_state_dict(policy.state_dict(), strict=True)
                     for p in ema_policy.parameters():
                         p.requires_grad = False
                     ema_policy.to("cpu")
                     started_ema = True
-            # if step % val_freq == 0:
-                # print("evaluating trained policy")
-                # policy.eval()
-                # val_success_rate, ema_flag = eval_train_policy(policy, dataset_name, cfg.resize_size, device)
-                # policy.train()
-                # success_rates.append(val_success_rate)
-                # val_steps.append(step)
-                # print(f"[INFO] overall success rate at step {step}: {val_success_rate}")
-                # if ema_flag and not started_ema:
-                #     print(f"[INFO] starting ema updates at step {step}")
-                #     ema_policy.to(device)
-                #     ema_policy.load_state_dict(policy.state_dict())
-                #     for p in ema_policy.parameters():
-                #         p.requires_grad = False
-                #     ema_policy.to("cpu")
-                #     started_ema = True
+            if use_wandb:
+                run.log(log_dict, step=step)            
             if step >= training_steps:
                 done = True
                 break
 
+    print("Run ID:", run.id)
+    print("Run URL:", run.url)
+    print("Run name:", run.name)
+    run.finish()
 
     # Save a policy checkpoint.
     policy.save_pretrained(output_directory/"final_model")
     ema_policy.save_pretrained(output_directory/"final_ema_model")
 
-    train_stats = {
-        'train loss' : losses,
-        'success_rates': success_rates,
-        'val steps' : val_steps
-    }
-    current_time = time.strftime("%H:%M:%D", time.localtime(time.time()))
-    stats_name = f"{dataset_name}{ribs_suffix}_{current_time}.json"
-    with open(stats_name, "w") as f:
-        json.dump(train_stats, f)
-    print(f'saved losses and temp success rates at {stats_name}')
+    # train_stats = {
+    #     'train loss' : losses,
+    #     'success_rates': success_rates,
+    #     'val steps' : val_steps,
+    # }
+    # current_time = time.strftime("%Y:%m:%d_%H:%M", time.localtime())
+    # stats_name = f"{dataset_name}{ribs_suffix}_{current_time}.json"
+    # with open(stats_name, "w") as f:
+    #     json.dump(train_stats, f)
+    # print(f'saved losses and temp success rates at {stats_name}')
 
 
 def cleanup():
@@ -358,6 +364,7 @@ if __name__ == "__main__":
 
     try:
         main()
+        cleanup()
     except Exception as e:
         print("uncaught exception:", e)
         traceback.print_exc()

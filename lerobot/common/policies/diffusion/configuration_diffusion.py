@@ -133,7 +133,7 @@ class DiffusionConfig(PreTrainedConfig):
     use_separate_rgb_encoder_per_camera: bool = True
     img_hidden_dim: int | None= 128
     lang_hidden_dim: int | None = None
-    state_hidden_dim: int = 128
+    state_hidden_dim: int | None = None
     cond_emb_dim: int | None = None
     cond_mlp_dims: tuple = (1024, 512, 512)
     use_layer_norm: bool = True

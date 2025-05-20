@@ -60,8 +60,8 @@ random.seed(42)
 # PICK TASK: libero_object, libero_spatial
 dataset_name = "libero_object"
 using_ribs = False
-using_ema = True
-training_steps = 30000
+using_ema = False
+training_steps = 100000
 ribs_suffix = "-ribs" if using_ribs else ""
 ema_prefix = "ema_" if using_ema else ""
 desc = "openvla"
@@ -84,7 +84,7 @@ policy.eval()
 cfg = policy.config
 task_embs = get_task_embeddings(cfg, dataset_name)
 policy.set_task_embeddings(task_embs.to(device))
-pprint(cfg)
+# pprint(cfg)
 # exit()
 
 # Initialize evaluation environment to render two observation types:
@@ -117,13 +117,13 @@ for task_id in range(task_suite.n_tasks):
     "camera_heights": 256,
     "camera_widths": 256,
     }
-    print(f"env camera dims: {env_args['camera_heights']}")
+    # print(f"env camera dims: {env_args['camera_heights']}")
     env = OffScreenRenderEnv(**env_args)
     init_state_id = 0
     init_states = task_suite.get_task_init_states(task_id) # for benchmarking purpose, we fix the a set of initial states
     with VideoWriter(output_directory, f_name_base=f_name_base, save_video=True, single_video=True) as video_writer:
         for idx in range(num_evals_per_task):
-            print(f"Test {idx+1}")
+            # print(f"Test {idx+1}")
             policy.reset()
             env.seed(42)
             env.reset()
