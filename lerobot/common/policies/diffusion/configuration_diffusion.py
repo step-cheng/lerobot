@@ -129,6 +129,7 @@ class DiffusionConfig(PreTrainedConfig):
     crop_is_random: bool = True
     pretrained_backbone_weights: str | None = None
     use_group_norm: bool = True
+    n_groups: int = 8
     spatial_softmax_num_keypoints: int = 32
     use_separate_rgb_encoder_per_camera: bool = True
     img_hidden_dim: int | None= 128
@@ -136,13 +137,15 @@ class DiffusionConfig(PreTrainedConfig):
     state_hidden_dim: int | None = None
     cond_emb_dim: int | None = None
     cond_mlp_dims: tuple = (1024, 512, 512)
-    use_layer_norm: bool = True
     use_lang_encoder: bool = True
     use_state_encoder: bool = True
+    use_layer_norm: bool | None = None
+    use_layer_norm_state: bool = False
+    use_layer_norm_lang: bool = False
+    use_layer_norm_image: bool = False
     # Unet.
     down_dims: tuple[int, ...] = (512, 1024, 2048)
     kernel_size: int = 5
-    n_groups: int = 8
     diffusion_step_embed_dim: int = 128
     use_film_scale_modulation: bool = True
     # Noise scheduler.
@@ -155,7 +158,7 @@ class DiffusionConfig(PreTrainedConfig):
     clip_sample: bool = True
     clip_sample_range: float = 1.0
     ema_decay: float = 0.99
-    use_ribs: float = False
+    use_ribs: bool = False
     ribs_path: str = "../RIBS/src/ribs-libero_object.pth"
     ribs_frozen: bool = False
 
@@ -163,7 +166,7 @@ class DiffusionConfig(PreTrainedConfig):
     num_inference_steps: int | None = None
 
     # Loss computation
-    do_mask_loss_for_padding: bool = False
+    do_mask_loss_for_padding: bool = True
 
     # Training presets
     optimizer_lr: float = 1e-4

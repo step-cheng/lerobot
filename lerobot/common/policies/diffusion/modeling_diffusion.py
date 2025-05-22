@@ -266,16 +266,20 @@ class DiffusionModel(nn.Module):
         else:
             self.num_inference_steps = config.num_inference_steps
 
+        self.layernorm_state = nn.LayerNorm(128) if config.use_layer_norm_state else nn.Identity()
+        self.layernorm_lang = nn.LayerNorm(128) if config.use_layer_norm_lang else nn.Identity()
+        self.layernorm_img_agent = nn.LayerNorm(self.rgb_encoder[0].feature_dim) if config.use_layer_norm_image else nn.Identity()
+        self.layernorm_img_wrist = nn.LayerNorm(self.rgb_encoder[1].feature_dim) if config.use_layer_norm_image else nn.Identity()
         if config.use_layer_norm:
             self.layernorm_state = nn.LayerNorm(128)
             self.layernorm_lang = nn.LayerNorm(128)
             self.layernorm_img_agent = nn.LayerNorm(self.rgb_encoder[0].feature_dim)
             self.layernorm_img_wrist = nn.LayerNorm(self.rgb_encoder[1].feature_dim)
-        else:
-            self.layernorm_state = nn.Identity()
-            self.layernorm_lang = nn.Identity()
-            self.layernorm_img_agent = nn.Identity()
-            self.layernorm_img_wrist = nn.Identity()
+        # else:
+        #     self.layernorm_state = nn.Identity()
+        #     self.layernorm_lang = nn.Identity()
+        #     self.layernorm_img_agent = nn.Identity()
+        #     self.layernorm_img_wrist = nn.Identity()
 
     # ========= inference  ============
     def conditional_sample(

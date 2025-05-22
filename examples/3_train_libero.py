@@ -54,14 +54,14 @@ from train_utils import get_task_embeddings #, eval_train_policy
 def main():
     # Create a directory to store the training checkpoint.
     use_wandb = True
-    wandb_run_name = "libero_object_arch=droid_stateEncoder=True"
+    wandb_run_name = "libero_object_arch=droid_ribs=True_ln=False" if use_wandb else "test"
     dataset_name = "libero_object"
-    use_ribs = False
+    use_ribs = True
     resume = False
-    resume_step = 30000
+    resume_step = 0
 
     ribs_suffix = "-ribs" if use_ribs else ""
-    output_directory = Path(f"outputs/reproduce-openvla/{dataset_name}{ribs_suffix}")
+    output_directory = Path(f"outputs/train/{wandb_run_name}")
     output_directory.mkdir(parents=True, exist_ok=True)
     print(f"output path: {output_directory}")
 
@@ -71,7 +71,7 @@ def main():
     np.random.seed(42)
     random.seed(42)
 
-    training_steps = 100000
+    training_steps = 80000
     save_every = 10000
     check_ema_start_freq = 500
     def save_flag (current_step):
@@ -85,6 +85,7 @@ def main():
     log_freq = 100
     ema_log_freq = 500
     started_ema = False
+    start_ema_threshold = 0.03
 
     # When starting from scratch (i.e. not from a pretrained policy), we need to specify 2 things before
     # creating the policy:
@@ -129,9 +130,9 @@ def main():
             vision_backbone="resnet50",
             pretrained_backbone_weights= None, # torchvision.models.ResNet50_Weights.IMAGENET1K_V2,
             use_group_norm=True,
-            use_layer_norm=False,
+            use_layer_norm_state=True,
             use_lang_encoder=False,
-            use_state_encoder=True,
+            use_state_encoder=False,
             lang_hidden_dim=None,
             img_hidden_dim=None,
             state_hidden_dim=128,
@@ -141,8 +142,9 @@ def main():
             num_inference_steps=16,
             use_separate_rgb_encoder_per_camera=True,
             use_ribs=use_ribs,
-            ribs_frozen=False,
-            ema_decay=0.75,
+            ribs_frozen=True,
+            ribs_path="../src/ribs-libero_object.pth",
+            ema_decay=0.99,
             scheduler_warmup_steps=1000,
         )
         # pprint(dataset_metadata.features)
@@ -153,6 +155,7 @@ def main():
         ema_policy = copy.deepcopy(policy)
 
     pprint(cfg)
+    print(policy)
     train_param_count = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     print(f"Number of trainable parameters: {train_param_count}")
 
@@ -225,7 +228,7 @@ def main():
     else:
         raise NotImplementedError("Need a scheduler")
     
-    num_workers=12
+    num_workers=16
     print(f"[Info] num workers: {num_workers}")
     dataloader = torch.utils.data.DataLoader(
         dataset,
@@ -307,7 +310,7 @@ def main():
             if not started_ema and step % check_ema_start_freq == 0:
                 moving_avg_loss = np.mean(losses[-min(len(losses), 2000):])
                 print(f'moving average loss: {moving_avg_loss}')
-                if moving_avg_loss < 0.025:
+                if moving_avg_loss < start_ema_threshold:
                     print(f"[INFO] starting ema updates at step {step}")
                     ema_policy.to(device)
                     ema_policy.load_state_dict(policy.state_dict(), strict=True)

@@ -59,22 +59,23 @@ random.seed(42)
 
 # PICK TASK: libero_object, libero_spatial
 dataset_name = "libero_object"
-using_ribs = False
-using_ema = False
-training_steps = 100000
+using_ribs = True
+using_ema = True
+training_steps = 40000
 ribs_suffix = "-ribs" if using_ribs else ""
 ema_prefix = "ema_" if using_ema else ""
 desc = "openvla"
+model_path = "libero_object-ribs"
 
 # Create a directory to store the video of the evaluation
-output_directory = Path(f"outputs/eval/{dataset_name}{ribs_suffix}-{desc}/")
+output_directory = Path(os.path.join("outputs/eval/", model_path))
 output_directory.mkdir(parents=True, exist_ok=True)
 
 # Select your device
 device = "cuda"
 
 # Provide the [hugging face repo id](https://huggingface.co/lerobot/diffusion_pusht):
-pretrained_policy_path = f"outputs/reproduce-openvla/{dataset_name}{ribs_suffix}/{ema_prefix}model-{training_steps}"
+pretrained_policy_path = os.path.join("outputs/train/", model_path, f"{ema_prefix}model-{training_steps}")
 print(f"[INFO] loading {pretrained_policy_path}")
 # OR a path to a local outputs/train folder.
 # pretrained_policy_path = Path("outputs/train/example_pusht_diffusion")
@@ -84,7 +85,7 @@ policy.eval()
 cfg = policy.config
 task_embs = get_task_embeddings(cfg, dataset_name)
 policy.set_task_embeddings(task_embs.to(device))
-# pprint(cfg)
+pprint(cfg)
 # exit()
 
 # Initialize evaluation environment to render two observation types:
